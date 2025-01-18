@@ -29,6 +29,7 @@ func BenchmarkHRW(b *testing.B) {
 		{name: "hrwXXHashWithAppend", hashF: hrwXXHashWithAppend},
 		{name: "hrwXXHash+XorShift", hashF: hrwHybridXXHashXorshift},
 		{name: "hrwXXHash+Xoshiro", hashF: hrwHybridXXHashXoshiro256},
+		{name: "weightedhrwXXHash+Xoshiro", hashF: WeightedHrwHybridXXHashXoshiro256, weight: 1},
 	}
 
 	// Length of name: {256, 512, 1024}
@@ -38,10 +39,16 @@ func BenchmarkHRW(b *testing.B) {
 		for k := uint(4); k <= 6; k++ {
 			numNodes := 1 << k
 			nodes := randNodeIDs(numNodes, randGen)
+
 			fileName := randFileName(randGen, nameLen)
 			for _, hashFunc := range hashFuncs {
 				b.Run(fmt.Sprintf("%s/%d/%d", hashFunc.name, numNodes, nameLen), func(b *testing.B) {
 					var nodeID int
+					if hashFunc.weight > 0 {
+						for _, node := range nodes {
+							node.weight = float64(rand.Uint64N(10) + 1)
+						}
+					}
 					for range b.N {
 						// Record the result to prevent the compiler
 						// eliminating the function call.
@@ -89,7 +96,7 @@ func TestEqualDistribution(t *testing.T) {
 			for r := range numRoutines {
 				go func(r int, hashFs []hashFuncs, dist [][]int) {
 					defer wg.Done()
-					invokeHashFunctions(seed+int64(r+10), objsPerRoutine, numNodes, useSimilarNames, hashFs, dist)
+					invokeHashFunctions(seed+int64(r+50), objsPerRoutine, numNodes, useSimilarNames, hashFs, dist, nil)
 				}(r, hashFs, objDist[r])
 			}
 			wg.Wait()
@@ -129,9 +136,97 @@ func TestEqualDistribution(t *testing.T) {
 	}
 }
 
-func invokeHashFunctions(seed int64, numObjs, numNodes int, useSimilarNames bool, hashFuncs []hashFuncs, dist [][]int) {
+func TestEqualDistributionWeighted(t *testing.T) {
+	// Testing for the previous approach as well as the new approach
+	// since if both fail the test then the hash algorithm isn't the cause.
+	hashFs := []hashFuncs{
+		{name: "weightedhrwXXHash+Xoshiro", hashF: WeightedHrwHybridXXHashXoshiro256},
+	}
+
+	seed := time.Now().UnixNano()
+	t.Logf("Seed: %d", seed)
+
+	numRoutines := 1000
+	objsPerRoutine := 1000
+	// We don't want to run for a large number of objects since it takes longer.
+	totalObjs := numRoutines * objsPerRoutine // 1 million objects
+	threshold := 0.0025 * float64(totalObjs)  // 0.25% = +/- 2.5k objects
+
+	for _, useSimilarNames := range []bool{true, false} {
+		// Number of nodes: {4, 8, 16, 32, 64}
+		for k := uint(2); k <= 6; k++ {
+			numNodes := 1 << k
+
+			for idx := range hashFs {
+				hashFs[idx].countObjs = make([]int, numNodes)
+			}
+
+			objDist := get3DSlice(numRoutines, len(hashFs), numNodes)
+			weights := make([]uint64, numNodes)
+			weightSum := uint64(0)
+			for i := range weights {
+				// Assign random weight
+				weights[i] = uint64(rand.Uint64N(10) + 1)
+				weightSum += weights[i]
+			}
+			var wg sync.WaitGroup
+			wg.Add(numRoutines)
+			for r := range numRoutines {
+				go func(r int, hashFs []hashFuncs, dist [][]int) {
+					defer wg.Done()
+					invokeHashFunctions(seed+int64(r+10), objsPerRoutine, numNodes, useSimilarNames, hashFs, dist, weights)
+				}(r, hashFs, objDist[r])
+			}
+			wg.Wait()
+
+			mean := float64(totalObjs) / float64(numNodes)
+
+			maxDiff := -1.0
+			for f, hashFunc := range hashFs {
+				sum := 0
+				for r := range numRoutines {
+					for idx := range numNodes {
+						hashFunc.countObjs[idx] += objDist[r][f][idx]
+						sum += objDist[r][f][idx]
+					}
+				}
+				if sum != totalObjs {
+					t.Fatalf("Expected objects: %d, Actual objects: %d", totalObjs, sum)
+				}
+
+				for i, c := range hashFunc.countObjs {
+					weight := weights[i]
+					expected := float64(totalObjs) * float64(weight) / float64(weightSum)
+					diff := math.Abs(expected - float64(c))
+					if diff > threshold {
+						t.Errorf("Name: %s, Nodes: %d, Weight: %d,  Mean: %f, Expected: %f, Actual: %d, Threshold: %f, Diff: %f",
+							hashFunc.name, numNodes, weight, mean, expected, c, threshold, diff)
+					}
+					if diff > maxDiff {
+						maxDiff = diff
+					}
+				}
+				t.Logf("Name: %s, MaxDiff: %f, Threshold: %f\n", hashFunc.name, maxDiff, threshold)
+			}
+		}
+
+		// When you run this test multiple times using `-count x` then GC is not called until all the runs finish.
+		// This will end up consuming a lot of RAM. Thus, calling GC explicitly.
+		runtime.GC()
+	}
+}
+
+func invokeHashFunctions(seed int64, numObjs, numNodes int, useSimilarNames bool, hashFuncs []hashFuncs, dist [][]int, weights []uint64) {
 	randGen := rand.New(cos.NewRandSource(uint64(seed)))
 	nodes := randNodeIDs(numNodes, randGen)
+	// Set weights for the nodes
+	if weights == nil {
+
+	} else {
+		for i := range nodes {
+			nodes[i].weight = float64(weights[i])
+		}
+	}
 	bucketName := randFileName(randGen, fqnMaxLen-objNameLen)
 	for n := range numObjs {
 		var fileName string

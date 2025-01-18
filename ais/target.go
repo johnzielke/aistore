@@ -191,6 +191,9 @@ func (t *target) init(config *cmn.Config) {
 	}
 	t.si.Init(tid, apc.Target)
 
+	cos.AssertMsg(config.LocalConfig.NodeWeight > 0, "node weight must be greater than 0")
+	t.si.SetWeight(config.LocalConfig.NodeWeight)
+
 	cos.InitShortID(t.si.Digest())
 
 	memsys.Init(t.SID(), t.SID(), config)

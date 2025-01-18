@@ -52,11 +52,12 @@ type (
 // local config
 type (
 	LocalConfig struct {
-		ConfigDir string         `json:"confdir"`
-		LogDir    string         `json:"log_dir"`
-		HostNet   LocalNetConfig `json:"host_net"`
-		FSP       FSPConf        `json:"fspaths"`
-		TestFSP   TestFSPConf    `json:"test_fspaths"`
+		ConfigDir  string         `json:"confdir"`
+		LogDir     string         `json:"log_dir"`
+		HostNet    LocalNetConfig `json:"host_net"`
+		FSP        FSPConf        `json:"fspaths"`
+		TestFSP    TestFSPConf    `json:"test_fspaths"`
+		NodeWeight float64        `json:"node_weight"`
 	}
 
 	// ais node: (local) network config

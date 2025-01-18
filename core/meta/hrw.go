@@ -6,6 +6,8 @@ package meta
 
 import (
 	"fmt"
+	"github.com/NVIDIA/aistore/cmn/debug"
+	"math"
 	"sync/atomic"
 
 	"github.com/NVIDIA/aistore/api/apc"
@@ -20,6 +22,18 @@ import (
 // See also: fs/hrw.go
 
 var robin atomic.Uint64 // round
+
+const (
+	maxUint64 = float64(^uint64(0))
+)
+
+func weightedRW(tsi *Snode, digest uint64) float64 {
+	debug.Assert(tsi.Weight() > 0)
+	cksum := float64(xoshiro256.Hash(tsi.Digest()^digest)) / maxUint64
+	cksum = -tsi.Weight() / math.Log(cksum)
+
+	return cksum
+}
 
 func (smap *Smap) HrwName2T(uname []byte) (*Snode, error) {
 	digest := xxhash.Checksum64S(uname, cos.MLCG32)
@@ -44,12 +58,12 @@ func (smap *Smap) HrwMultiHome(uname []byte) (si *Snode, netName string, err err
 }
 
 func (smap *Smap) HrwHash2T(digest uint64) (si *Snode, err error) {
-	var maxH uint64
+	var maxH float64
 	for _, tsi := range smap.Tmap {
 		if tsi.InMaintOrDecomm() { // always skipping targets 'in maintenance mode'
 			continue
 		}
-		cs := xoshiro256.Hash(tsi.Digest() ^ digest)
+		cs := weightedRW(tsi, digest)
 		if cs >= maxH {
 			maxH = cs
 			si = tsi
@@ -63,9 +77,9 @@ func (smap *Smap) HrwHash2T(digest uint64) (si *Snode, err error) {
 
 // NOTE: including targets 'in maintenance mode', if any
 func (smap *Smap) HrwHash2Tall(digest uint64) (si *Snode, err error) {
-	var maxH uint64
+	var maxH float64
 	for _, tsi := range smap.Tmap {
-		cs := xoshiro256.Hash(tsi.Digest() ^ digest)
+		cs := weightedRW(tsi, digest)
 		if cs >= maxH {
 			maxH = cs
 			si = tsi
@@ -102,14 +116,14 @@ func (smap *Smap) HrwProxy(idToSkip string) (pi *Snode, err error) {
 
 func (smap *Smap) HrwIC(uuid string) (pi *Snode, err error) {
 	var (
-		maxH   uint64
+		maxH   float64
 		digest = xxhash.Checksum64S(cos.UnsafeB(uuid), cos.MLCG32)
 	)
 	for _, psi := range smap.Pmap {
 		if psi.InMaintOrDecomm() || !psi.IsIC() {
 			continue
 		}
-		cs := xoshiro256.Hash(psi.Digest() ^ digest)
+		cs := weightedRW(psi, digest)
 		if cs >= maxH {
 			maxH = cs
 			pi = psi
@@ -125,7 +139,7 @@ func (smap *Smap) HrwIC(uuid string) (pi *Snode, err error) {
 // (we want only one target to do it).
 func (smap *Smap) HrwTargetTask(uuid string) (si *Snode, err error) {
 	var (
-		maxH   uint64
+		maxH   float64
 		digest = xxhash.Checksum64S(cos.UnsafeB(uuid), cos.MLCG32)
 	)
 	for _, tsi := range smap.Tmap {
@@ -133,7 +147,7 @@ func (smap *Smap) HrwTargetTask(uuid string) (si *Snode, err error) {
 			continue
 		}
 		// Assumes that sinfo.idDigest is initialized
-		cs := xoshiro256.Hash(tsi.Digest() ^ digest)
+		cs := weightedRW(tsi, digest)
 		if cs >= maxH {
 			maxH = cs
 			si = tsi
@@ -150,7 +164,7 @@ func (smap *Smap) HrwTargetTask(uuid string) (si *Snode, err error) {
 /////////////
 
 type hrwList struct {
-	hs  []uint64
+	hs  []float64
 	sis Nodes
 	n   int
 }
@@ -172,7 +186,8 @@ func (smap *Smap) HrwTargetList(uname *string, count int) (sis Nodes, err error)
 	hlist := newHrwList(count)
 
 	for _, tsi := range smap.Tmap {
-		cs := xoshiro256.Hash(tsi.Digest() ^ digest)
+		cs := weightedRW(tsi, digest)
+
 		if tsi.InMaintOrDecomm() {
 			continue
 		}
@@ -187,14 +202,14 @@ func (smap *Smap) HrwTargetList(uname *string, count int) (sis Nodes, err error)
 }
 
 func newHrwList(count int) *hrwList {
-	return &hrwList{hs: make([]uint64, 0, count), sis: make(Nodes, 0, count), n: count}
+	return &hrwList{hs: make([]float64, 0, count), sis: make(Nodes, 0, count), n: count}
 }
 
 func (hl *hrwList) get() Nodes { return hl.sis }
 
 // Adds Snode with `weight`. The result is sorted on the fly with insertion sort
 // and it makes sure that the length of resulting list never exceeds `count`
-func (hl *hrwList) add(weight uint64, sinfo *Snode) {
+func (hl *hrwList) add(weight float64, sinfo *Snode) {
 	l := len(hl.sis)
 	if l == hl.n && weight <= hl.hs[l-1] {
 		return

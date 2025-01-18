@@ -73,7 +73,8 @@ type (
 		PubExtra   []NetInfo  `json:"pub_extra,omitempty"`
 		DataNet    NetInfo    `json:"intra_data_net"`    // cmn.NetIntraData
 		ControlNet NetInfo    `json:"intra_control_net"` // cmn.NetIntraControl
-		DaeType    string     `json:"daemon_type"`       // "target" or "proxy"
+		DaeWeight  float64    `json:"node_weight"`
+		DaeType    string     `json:"daemon_type"` // "target" or "proxy"
 		DaeID      string     `json:"daemon_id"`
 		name       string
 		Flags      cos.BitFlags `json:"flags"` // enum { SnodeNonElectable, SnodeIC, ... }
@@ -108,6 +109,10 @@ func (d *Snode) Init(id, daeType string) {
 }
 
 func (d *Snode) Digest() uint64 { return d.idDigest }
+
+func (d *Snode) Weight() float64 { return d.DaeWeight }
+
+func (d *Snode) SetWeight(weight float64) { d.DaeWeight = weight }
 
 func (d *Snode) setDigest() {
 	if d.idDigest == 0 {

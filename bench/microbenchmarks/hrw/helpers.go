@@ -17,6 +17,7 @@ import (
 type hashFuncs struct {
 	name      string
 	hashF     func(string, []node) int
+	weight    uint64
 	countObjs []int
 }
 

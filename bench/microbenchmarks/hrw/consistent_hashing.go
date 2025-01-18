@@ -9,6 +9,7 @@ import (
 	"github.com/NVIDIA/aistore/cmn/cos"
 	"github.com/NVIDIA/aistore/cmn/xoshiro256"
 	"github.com/OneOfOne/xxhash"
+	"math"
 )
 
 const xxHashSeed = 1103515245
@@ -17,6 +18,7 @@ type node struct {
 	id          string
 	idDigestInt uint64
 	idDigestXX  *xxhash.XXHash64
+	weight      float64
 }
 
 func hrwXXHash(key string, nodes []node) int {
@@ -82,6 +84,28 @@ func hrwHybridXXHashXoshiro256(key string, nodes []node) int {
 	for idx, node := range nodes {
 		// node.hash equals xxhash.Checksum64S(node.id, xxHashSeed)
 		cksum := xoshiro256.Hash(node.idDigestInt ^ keyHash)
+		if cksum > maxCksum {
+			maxCksum = cksum
+			destIdx = idx
+		}
+	}
+
+	return destIdx
+}
+
+const (
+	maxUint64 = float64(^uint64(0))
+)
+
+func WeightedHrwHybridXXHashXoshiro256(key string, nodes []node) int {
+	keyHash := xxhash.Checksum64S(cos.UnsafeB(":"+key), xxHashSeed)
+
+	var maxCksum float64
+	var destIdx int
+	for idx, node := range nodes {
+		// node.hash equals xxhash.Checksum64S(node.id, xxHashSeed)
+		cksum := float64(xoshiro256.Hash(node.idDigestInt^keyHash)) / maxUint64
+		cksum = -node.weight / math.Log(cksum)
 		if cksum > maxCksum {
 			maxCksum = cksum
 			destIdx = idx
